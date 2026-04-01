@@ -12,6 +12,7 @@ export async function POST(req: Request) {
     }
 
     const nimProvider = createOpenAICompatible({
+      name: 'nvidia-nim',
       baseURL: baseUrl || 'https://integrate.api.nvidia.com/v1',
       apiKey: apiKey,
     });
