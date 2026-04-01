@@ -13,12 +13,20 @@ interface NIMConfig {
   systemPrompt?: string;
 }
 
+interface Message {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export default function NimChatPage() {
   const [config, setConfig] = useState<NIMConfig | null>(null);
   const [hasOpenedSettings, setHasOpenedSettings] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [input, setInput] = useState('');
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
 
   // Load config from localStorage
   useEffect(() => {
@@ -31,21 +39,6 @@ export default function NimChatPage() {
       }
     }
   }, []);
-
-  const { messages, handleSubmit: originalSubmit, isLoading } = useChat({
-    api: '/api/nim-chat',
-    body: config
-      ? {
-          baseUrl: config.baseUrl,
-          apiKey: config.apiKey,
-          model: config.model,
-          systemPrompt: config.systemPrompt,
-        }
-      : {},
-    onFinish: () => {
-      scrollToBottom();
-    },
-  });
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -62,64 +55,99 @@ export default function NimChatPage() {
     }
   }, [config]);
 
-  // Session history (localStorage-based)
-  const [sessions, setSessions] = useState<any[]>([]);
-  const [currentSessionId, setCurrentSessionId] = useState('default');
-
-  useEffect(() => {
-    const saved = localStorage.getItem('chatSessions');
-    if (saved) {
-      try {
-        setSessions(JSON.parse(saved));
-      } catch (e) {
-        console.error('Failed to parse sessions', e);
-      }
-    }
-  }, []);
-
-  const saveSessions = (newSessions: any[]) => {
-    localStorage.setItem('chatSessions', JSON.stringify(newSessions));
-    setSessions(newSessions);
-  };
-
-  const createNewSession = () => {
-    const newSession = {
-      id: `session-${Date.now()}`,
-      title: 'New chat',
-      createdAt: new Date().toISOString(),
-      messages: [],
-    };
-    const newSessions = [newSession, ...sessions];
-    saveSessions(newSessions);
-    setCurrentSessionId(newSession.id);
-    // Clear current chat
-    setInput('');
-  };
-
-  const deleteSession = (sessionId: string) => {
-    const newSessions = sessions.filter((s) => s.id !== sessionId);
-    saveSessions(newSessions);
-    if (currentSessionId === sessionId) {
-      setCurrentSessionId(newSessions[0]?.id || 'default');
-    }
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!config?.apiKey) {
-      alert('Please configure your NIM API key in settings first!');
+    
+    if (!config?.apiKey || !input.trim()) {
       return;
     }
-    originalSubmit(e, {
-      experimental_attachments: [],
-      data: {
-        baseUrl: config?.baseUrl,
-        apiKey: config?.apiKey,
-        model: config?.model,
-        systemPrompt: config?.systemPrompt,
-      },
-    });
+
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: input.trim(),
+    };
+
+    setMessages(prev => [...prev, userMessage]);
     setInput('');
+    setIsLoading(true);
+
+    try {
+      const response = await fetch('/api/nim-chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messages: [
+            ...(messages.map(m => ({
+              role: m.role,
+              content: m.content,
+            }))),
+            { role: 'user', content: userMessage.content },
+          ],
+          baseUrl: config.baseUrl,
+          apiKey: config.apiKey,
+          model: config.model,
+          systemPrompt: config.systemPrompt,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to get response');
+      }
+
+      // Read streaming response
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('No reader');
+      }
+
+      const decoder = new TextDecoder();
+      let assistantMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: '',
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        const chunk = decoder.decode(value);
+        // Parse the stream - in v6 it's a data stream
+        const lines = chunk.split('\n');
+        for (const line of lines) {
+          if (line.startsWith('0:')) {
+            // Text content
+            const text = line.slice(2);
+            if (text) {
+              assistantMessage.content += text;
+              setMessages(prev => {
+                const filtered = prev.filter(m => m.id !== assistantMessage.id);
+                return [...filtered, assistantMessage];
+              });
+            }
+          }
+        }
+      }
+
+      // If message wasn't added yet, add it
+      if (assistantMessage.content && !messages.find(m => m.id === assistantMessage.id)) {
+        setMessages(prev => [...prev, assistantMessage]);
+      }
+
+    } catch (error: any) {
+      console.error('Chat error:', error);
+      const errorMessage: Message = {
+        id: (Date.now() + 2).toString(),
+        role: 'assistant',
+        content: `Error: ${error.message}`,
+      };
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -167,65 +195,10 @@ export default function NimChatPage() {
               sidebarOpen ? 'block' : 'hidden lg:block'
             }`}
           >
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold">Sessions</h2>
-              <button
-                onClick={createNewSession}
-                className="p-1 hover:bg-muted rounded"
-                title="New chat"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <line x1="12" y1="5" x2="12" y2="19" />
-                  <line x1="5" y1="12" x2="19" y2="12" />
-                </svg>
-              </button>
-            </div>
-            <div className="space-y-1">
-              {sessions.map((session) => (
-                <div
-                  key={session.id}
-                  className="group flex items-center justify-between p-2 hover:bg-muted rounded-md cursor-pointer text-sm"
-                  onClick={() => {
-                    setCurrentSessionId(session.id);
-                    setSidebarOpen(false);
-                  }}
-                >
-                  <span className="truncate flex-1">{session.title}</span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteSession(session.id);
-                    }}
-                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-destructive/20 rounded"
-                  >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <path d="M3 6h18" />
-                      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-                      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                    </svg>
-                  </button>
-                </div>
-              ))}
+            <h2 className="text-sm font-semibold mb-4">Info</h2>
+            <div className="text-xs text-muted-foreground space-y-2">
+              <p>Model: {config?.model || 'Not configured'}</p>
+              <p>Messages: {messages.length}</p>
             </div>
           </aside>
         )}
@@ -278,15 +251,6 @@ export default function NimChatPage() {
                     {m.role === 'assistant' ? (
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
-                        components={{
-                          code({ node, className, children, ...props }) {
-                            return (
-                              <code className={className} {...props}>
-                                {children}
-                              </code>
-                            );
-                          },
-                        }}
                       >
                         {m.content}
                       </ReactMarkdown>
