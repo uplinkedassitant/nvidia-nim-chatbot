@@ -23,7 +23,7 @@ export async function POST(req: Request) {
       system: systemPrompt || 'You are a helpful, truthful, and slightly witty assistant inspired by Grok from xAI. Be maximally useful.',
     });
 
-    return result.toDataStreamResponse();
+    return result.toTextStreamResponse();
   } catch (error: any) {
     console.error('Chat API error:', error);
     return new Response(error.message || 'Error processing chat request', { status: 500 });
