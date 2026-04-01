@@ -18,6 +18,7 @@ export default function NimChatPage() {
   const [hasOpenedSettings, setHasOpenedSettings] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [input, setInput] = useState('');
 
   // Load config from localStorage
   useEffect(() => {
@@ -31,7 +32,7 @@ export default function NimChatPage() {
     }
   }, []);
 
-  const { messages, input, handleInputChange, handleSubmit, isLoading, setInput } = useChat({
+  const { messages, handleSubmit: originalSubmit, isLoading } = useChat({
     api: '/api/nim-chat',
     body: config
       ? {
@@ -101,6 +102,24 @@ export default function NimChatPage() {
     if (currentSessionId === sessionId) {
       setCurrentSessionId(newSessions[0]?.id || 'default');
     }
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!config?.apiKey) {
+      alert('Please configure your NIM API key in settings first!');
+      return;
+    }
+    originalSubmit(e, {
+      experimental_attachments: [],
+      data: {
+        baseUrl: config?.baseUrl,
+        apiKey: config?.apiKey,
+        model: config?.model,
+        systemPrompt: config?.systemPrompt,
+      },
+    });
+    setInput('');
   };
 
   return (
@@ -283,21 +302,14 @@ export default function NimChatPage() {
 
           {/* Input form */}
           <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (!config?.apiKey) {
-                alert('Please configure your NIM API key in settings first!');
-                return;
-              }
-              handleSubmit(e);
-            }}
+            onSubmit={handleSubmit}
             className="border-t p-4"
           >
             <div className="flex gap-2 max-w-3xl mx-auto">
               <input
                 type="text"
                 value={input}
-                onChange={handleInputChange}
+                onChange={(e) => setInput(e.target.value)}
                 placeholder={
                   config?.apiKey
                     ? 'Type a message...'
